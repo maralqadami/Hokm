@@ -93,8 +93,25 @@ function originFor(req, options) {
   return origin.origin;
 }
 
-function correctOrigin(req, origin) {
-  if (req.headers.origin !== origin) throw new RequestError(403,'فرم را از آدرس اصلی پروژه باز کن.');
+function correctOrigin(req, origin, production = '') {
+  // Vercel may expose the production alias separately from the host used
+  // by the function runtime. Accept only the request host or configured
+  // production URL, and fall back to Referer when Origin is omitted.
+  const allowed = new Set([origin, production].filter(Boolean));
+  const originHeader = req.headers.origin;
+  if (originHeader) {
+    try {
+      if (allowed.has(new URL(originHeader).origin)) return;
+    } catch {}
+    throw new RequestError(403,'فرم را از آدرس اصلی پروژه باز کن.');
+  }
+  const referer = req.headers.referer;
+  if (referer) {
+    try {
+      if (allowed.has(new URL(referer).origin)) return;
+    } catch {}
+  }
+  throw new RequestError(403,'فرم را از آدرس اصلی پروژه باز کن.');
 }
 
 async function rawBody(req, max) {
@@ -182,7 +199,7 @@ export function createApp(options) {
     const production = options.productionUrl();
     if (req.method === 'POST') {
       try {
-        correctOrigin(req,origin);
+        correctOrigin(req,origin,options.productionUrl());
         if (production && origin !== production) throw new RequestError(403,'نصب را روی دامنهٔ اصلی '+production+' انجام بده.');
         if (!databaseReady || !apiReady || !keyReady) throw new RequestError(503,'مقادیر لازم را در Vercel تنظیم و دوباره Deploy کن.');
         const fields = await form(req);
@@ -230,7 +247,7 @@ export function createApp(options) {
     let status = 200;
     if (req.method === 'POST') {
       try {
-        correctOrigin(req,origin);
+        correctOrigin(req,origin,options.productionUrl());
         const fields = await form(req);
         if (fields.get('action')!=='login') throw new RequestError(403,'ابتدا وارد پنل شو.');
         const now = unixTime();
@@ -274,7 +291,7 @@ export function createApp(options) {
     let banner = '';
     if (req.method==='POST') {
       try {
-        correctOrigin(req,origin);
+        correctOrigin(req,origin,options.productionUrl());
         const fields = await form(req);
         if (!equalSecret(csrf,fields.get('csrf'))) throw new RequestError(403,'مهلت فرم تمام شده. صفحه را دوباره باز کن.');
         const action = fields.get('action');
