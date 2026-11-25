@@ -1,0 +1,4 @@
+DirectoryIndex index.php
+<FilesMatch "(?i)(^\.|\.md$|\.zip$|\.sqlite3(?:-wal|-shm)?$|\.sql$|\.json$)">
+    Require all denied
+</FilesMatch>
