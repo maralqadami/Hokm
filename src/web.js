@@ -81,9 +81,24 @@ async function matchesPassword(password, record) {
 }
 
 function originFor(req, options) {
+  // On Vercel, the function's Host header can differ from the public
+  // production alias. Prefer the explicitly configured canonical URL.
+  const configured = options.productionUrl?.();
+  if (configured) {
+    try {
+      const canonical = new URL(configured);
+      if (canonical.protocol === 'https:' && !canonical.username && !canonical.password &&
+          canonical.pathname === '/' && !canonical.search && !canonical.hash) {
+        return canonical.origin;
+      }
+    } catch {}
+  }
+
+  const forwardedHost = String(req.headers['x-forwarded-host'] ?? '').split(',')[0].trim();
+  const host = forwardedHost || req.headers.host;
   let origin;
   try {
-    origin = new URL((options.allowHttp?'http://':'https://') + req.headers.host);
+    origin = new URL((options.allowHttp ? 'http://' : 'https://') + host);
   } catch {
     throw new RequestError(400,'آدرس درخواست معتبر نیست.');
   }
@@ -94,21 +109,16 @@ function originFor(req, options) {
 }
 
 function correctOrigin(req, origin, production = '') {
-  // Vercel may expose the production alias separately from the host used
-  // by the function runtime. Accept only the request host or configured
-  // production URL, and fall back to Referer when Origin is omitted.
-  const allowed = new Set([origin, production].filter(Boolean));
-  const originHeader = req.headers.origin;
-  if (originHeader) {
+  // Accept the canonical production origin even if Vercel routes the
+  // request through an internal/deployment hostname. Check both browser
+  // Origin and Referer, since some clients omit Origin on form POSTs.
+  const allowed = new Set([origin, production].filter(Boolean).map(value => {
+    try { return new URL(value).origin; } catch { return ''; }
+  }).filter(Boolean));
+  for (const value of [req.headers.origin, req.headers.referer]) {
+    if (!value) continue;
     try {
-      if (allowed.has(new URL(originHeader).origin)) return;
-    } catch {}
-    throw new RequestError(403,'فرم را از آدرس اصلی پروژه باز کن.');
-  }
-  const referer = req.headers.referer;
-  if (referer) {
-    try {
-      if (allowed.has(new URL(referer).origin)) return;
+      if (allowed.has(new URL(value).origin)) return;
     } catch {}
   }
   throw new RequestError(403,'فرم را از آدرس اصلی پروژه باز کن.');
@@ -199,7 +209,7 @@ export function createApp(options) {
     const production = options.productionUrl();
     if (req.method === 'POST') {
       try {
-        correctOrigin(req,origin,options.productionUrl());
+        correctOrigin(req,origin);
         if (production && origin !== production) throw new RequestError(403,'نصب را روی دامنهٔ اصلی '+production+' انجام بده.');
         if (!databaseReady || !apiReady || !keyReady) throw new RequestError(503,'مقادیر لازم را در Vercel تنظیم و دوباره Deploy کن.');
         const fields = await form(req);
@@ -247,7 +257,7 @@ export function createApp(options) {
     let status = 200;
     if (req.method === 'POST') {
       try {
-        correctOrigin(req,origin,options.productionUrl());
+        correctOrigin(req,origin);
         const fields = await form(req);
         if (fields.get('action')!=='login') throw new RequestError(403,'ابتدا وارد پنل شو.');
         const now = unixTime();
@@ -291,7 +301,7 @@ export function createApp(options) {
     let banner = '';
     if (req.method==='POST') {
       try {
-        correctOrigin(req,origin,options.productionUrl());
+        correctOrigin(req,origin);
         const fields = await form(req);
         if (!equalSecret(csrf,fields.get('csrf'))) throw new RequestError(403,'مهلت فرم تمام شده. صفحه را دوباره باز کن.');
         const action = fields.get('action');
