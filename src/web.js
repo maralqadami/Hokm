@@ -81,37 +81,34 @@ async function matchesPassword(password, record) {
 }
 
 function originFor(req, options) {
-  // Use the configured production URL as the canonical origin on Vercel.
-  // Vercel can route requests through a deployment hostname even when the
-  // visitor opened the stable production domain.
-  const configured = options.productionUrl();
-  if (configured) {
-    try {
-      const canonical = new URL(configured);
-      if (!['https:','http:'].includes(canonical.protocol) ||
-          canonical.username || canonical.password || canonical.pathname !== '/' ||
-          canonical.search || canonical.hash) {
-        throw new Error('invalid production URL');
-      }
-      return canonical.origin;
-    } catch {
-      throw new RequestError(400,'آدرس اصلی پروژه در تنظیمات معتبر نیست.');
-    }
-  }
-  let origin;
+  // On Vercel, use the configured production domain as the canonical origin.
+  // The internal Host header can differ after platform routing/rewrites.
+  const configured = typeof options.productionUrl === 'function' ? options.productionUrl() : '';
+  let candidate = configured || ((options.allowHttp ? 'http://' : 'https://') + (req.headers.host || ''));
+  let parsed;
   try {
-    origin = new URL((options.allowHttp?'http://':'https://') + req.headers.host);
+    if (configured && !/^https?:\/\//i.test(candidate)) candidate = 'https://' + candidate;
+    parsed = new URL(candidate);
   } catch {
     throw new RequestError(400,'آدرس درخواست معتبر نیست.');
   }
-  if (origin.pathname !== '/' || origin.username || origin.password || origin.search || origin.hash) {
+  if (parsed.pathname !== '/' || parsed.username || parsed.password || parsed.search || parsed.hash ||
+      (parsed.protocol !== 'https:' && !options.allowHttp)) {
     throw new RequestError(400,'آدرس درخواست معتبر نیست.');
   }
-  return origin.origin;
+  return parsed.origin;
 }
 
 function correctOrigin(req, origin) {
-  if (req.headers.origin !== origin) throw new RequestError(403,'فرم را از آدرس اصلی پروژه باز کن.');
+  // Browsers normally send Origin on POST. Some proxy/browser combinations
+  // omit it; in that case validate the Referer origin instead.
+  let submitted = req.headers.origin;
+  if (!submitted || submitted === 'null') submitted = req.headers.referer || req.headers.referrer || '';
+  let submittedOrigin = '';
+  try { submittedOrigin = new URL(submitted).origin; } catch {}
+  if (!submittedOrigin || submittedOrigin !== origin) {
+    throw new RequestError(403,'فرم را از آدرس اصلی پروژه باز کن.');
+  }
 }
 
 async function rawBody(req, max) {
@@ -199,8 +196,8 @@ export function createApp(options) {
     const production = options.productionUrl();
     if (req.method === 'POST') {
       try {
-        correctOrigin(req,origin,options.productionUrl());
-        if (production && origin !== new URL(production).origin) throw new RequestError(403,'نصب را روی دامنهٔ اصلی '+production+' انجام بده.');
+        correctOrigin(req,origin);
+        if (production && origin !== production) throw new RequestError(403,'نصب را روی دامنهٔ اصلی '+production+' انجام بده.');
         if (!databaseReady || !apiReady || !keyReady) throw new RequestError(503,'مقادیر لازم را در Vercel تنظیم و دوباره Deploy کن.');
         const fields = await form(req);
         if (!equalSecret(key,fields.get('setup') ?? '')) throw new RequestError(403,'کد نصب صحیح نیست.');
@@ -247,7 +244,7 @@ export function createApp(options) {
     let status = 200;
     if (req.method === 'POST') {
       try {
-        correctOrigin(req,origin,options.productionUrl());
+        correctOrigin(req,origin);
         const fields = await form(req);
         if (fields.get('action')!=='login') throw new RequestError(403,'ابتدا وارد پنل شو.');
         const now = unixTime();
@@ -291,7 +288,7 @@ export function createApp(options) {
     let banner = '';
     if (req.method==='POST') {
       try {
-        correctOrigin(req,origin,options.productionUrl());
+        correctOrigin(req,origin);
         const fields = await form(req);
         if (!equalSecret(csrf,fields.get('csrf'))) throw new RequestError(403,'مهلت فرم تمام شده. صفحه را دوباره باز کن.');
         const action = fields.get('action');
