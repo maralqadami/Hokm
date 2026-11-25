@@ -81,34 +81,20 @@ async function matchesPassword(password, record) {
 }
 
 function originFor(req, options) {
-  // On Vercel, use the configured production domain as the canonical origin.
-  // The internal Host header can differ after platform routing/rewrites.
-  const configured = typeof options.productionUrl === 'function' ? options.productionUrl() : '';
-  let candidate = configured || ((options.allowHttp ? 'http://' : 'https://') + (req.headers.host || ''));
-  let parsed;
+  let origin;
   try {
-    if (configured && !/^https?:\/\//i.test(candidate)) candidate = 'https://' + candidate;
-    parsed = new URL(candidate);
+    origin = new URL((options.allowHttp?'http://':'https://') + req.headers.host);
   } catch {
     throw new RequestError(400,'آدرس درخواست معتبر نیست.');
   }
-  if (parsed.pathname !== '/' || parsed.username || parsed.password || parsed.search || parsed.hash ||
-      (parsed.protocol !== 'https:' && !options.allowHttp)) {
+  if (origin.pathname !== '/' || origin.username || origin.password || origin.search || origin.hash) {
     throw new RequestError(400,'آدرس درخواست معتبر نیست.');
   }
-  return parsed.origin;
+  return origin.origin;
 }
 
 function correctOrigin(req, origin) {
-  // Browsers normally send Origin on POST. Some proxy/browser combinations
-  // omit it; in that case validate the Referer origin instead.
-  let submitted = req.headers.origin;
-  if (!submitted || submitted === 'null') submitted = req.headers.referer || req.headers.referrer || '';
-  let submittedOrigin = '';
-  try { submittedOrigin = new URL(submitted).origin; } catch {}
-  if (!submittedOrigin || submittedOrigin !== origin) {
-    throw new RequestError(403,'فرم را از آدرس اصلی پروژه باز کن.');
-  }
+  if (req.headers.origin !== origin) throw new RequestError(403,'فرم را از آدرس اصلی پروژه باز کن.');
 }
 
 async function rawBody(req, max) {
