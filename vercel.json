@@ -1,0 +1,21 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "installCommand": "npm ci",
+  "buildCommand": "npm run build",
+  "outputDirectory": "public",
+  "functions": {
+    "api/hokm.js": { "maxDuration": 40, "includeFiles": "src/schema.sql" }
+  },
+  "redirects": [
+    { "source": "/install.php", "destination": "/install", "permanent": false },
+    { "source": "/installer.php", "destination": "/install", "permanent": false },
+    { "source": "/admin.php", "destination": "/admin", "permanent": false }
+  ],
+  "rewrites": [
+    { "source": "/", "destination": "/api/hokm?page=home" },
+    { "source": "/install", "destination": "/api/hokm?page=install" },
+    { "source": "/admin", "destination": "/api/hokm?page=admin" },
+    { "source": "/api/telegram", "destination": "/api/hokm?page=telegram" }
+  ]
+}

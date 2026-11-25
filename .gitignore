@@ -1,0 +1,7 @@
+node_modules/
+.vercel/
+.env*
+*.sqlite*
+*.db
+*.db-wal
+*.db-shm
