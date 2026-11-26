@@ -21,7 +21,7 @@ class RequestError extends Error {
 function headers(res, type) {
   res.setHeader('Content-Type',type);
   res.setHeader('Cache-Control','private, no-store');
-  res.setHeader('Referrer-Policy','no-referrer');
+  res.setHeader('Referrer-Policy','same-origin');
   res.setHeader('X-Content-Type-Options','nosniff');
   res.setHeader('Content-Security-Policy',"default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
   res.setHeader('X-Robots-Tag','noindex, nofollow');
