@@ -1,11 +1,16 @@
-import { escape, fa, latin, shortText, unixTime } from './core.js';
+import { escape, fa, shortText, unixTime } from './core.js';
 import { GameError } from './game.js';
 import { Payments } from './payments.js';
+import { changePlayerField, findPlayer, registerPlayer, validUserId } from './player.js';
 import { Notices, playerName, Tables } from './tables.js';
-import { TelegramError } from './telegram.js';
+import { miniAppButton, TelegramError } from './telegram.js';
 import { button, home, Views } from './views.js';
 
-const validUserId = id => Number.isSafeInteger(id) && id > 0;
+const miniAppViews = {
+  start:'lobby',menu:'lobby',play:'lobby',table:'table',profile:'profile',friends:'friends',
+  rank:'rank',wallet:'profile',help:'rules',rules:'rules',feedback:'feedback',history:'profile',
+  queue:'lobby',practice:'lobby',room:'friends',store:'profile',leave:'table',
+};
 
 export class Bot {
   constructor(db, api, config, starsEnabled, now = unixTime()) {
@@ -43,17 +48,6 @@ export class Bot {
     }
   }
 
-  async user(db, from) {
-    const id = from?.id;
-    if (!validUserId(id) || from.is_bot) return null;
-    const name = shortText([from.first_name,from.last_name].filter(Boolean).join(' '),44) || 'بازیکن';
-    const username = shortText(from.username,32) || null;
-    await db.run('INSERT INTO users(id,name,telegram_username,active_at,created_at) VALUES(?,?,?,?,?) '+
-      'ON CONFLICT(id) DO UPDATE SET name=excluded.name,telegram_username=excluded.telegram_username,active_at=excluded.active_at',
-      id,name,username,this.now,this.now);
-    return db.one('SELECT * FROM users WHERE id=?',id);
-  }
-
   async route(ctx, update) {
     const { db,tables,payments,notices } = ctx;
     if (update.pre_checkout_query) {
@@ -62,7 +56,7 @@ export class Bot {
       if (!this.starsEnabled) {
         return ['answerPreCheckoutQuery',{pre_checkout_query_id:query.id,ok:false,error_message:'فروش در این نسخه فعال نیست.'}];
       }
-      const user = await this.user(db,query.from);
+      const user = await registerPlayer(db,query.from,this.now);
       return user ? ['answerPreCheckoutQuery',await payments.checkout(user.id,query)] : null;
     }
     const callback = update.callback_query;
@@ -71,7 +65,9 @@ export class Bot {
     const id = message.chat.id;
     if (!callback && (message.refunded_payment || message.successful_payment)) {
       if (!validUserId(id)) return null;
-      if (!(await db.scalar('SELECT 1 FROM users WHERE id=?',id)) && message.from?.id === id) await this.user(db,message.from);
+      if (!(await db.scalar('SELECT 1 FROM users WHERE id=?',id)) && message.from?.id === id) {
+        await registerPlayer(db,message.from,this.now);
+      }
       if (await db.scalar('SELECT 1 FROM users WHERE id=?',id)) {
         if (message.refunded_payment) await payments.onRefund(id,message.refunded_payment);
         else await payments.paid(id,message.successful_payment);
@@ -80,7 +76,7 @@ export class Bot {
     }
     const from = callback?.from ?? message.from;
     if (from?.id !== id) return null;
-    const user = await this.user(db,from);
+    const user = await registerPlayer(db,from,this.now);
     if (!user) return null;
     await tables.sweep();
     if (callback) {
@@ -109,46 +105,39 @@ export class Bot {
   }
 
   async message(ctx, user, text) {
-    const { db,tables,notices,views } = ctx;
+    const { db,notices,views } = ctx;
     const id = user.id;
     const command = /^\/([a-z_]+)(?:@[A-Za-z0-9_]+)?(?:\s+([\s\S]*))?$/.exec(text);
     if (command) {
       const args = (command[2] ?? '').trim();
       const join = /^j_([a-f0-9]{12})$/.exec(args);
-      if (command[1] === 'start' && join) {
-        await tables.joinRoom(id,join[1]);
+      if (Object.hasOwn(miniAppViews,command[1])) {
+        const view = command[1] === 'start' && args === 'hokm-store' ? 'profile' : miniAppViews[command[1]];
+        const params = command[1] === 'start' && join ? { join:join[1] } : { view };
+        const greeting = params.join
+          ? '♠️ <b>دعوت به میز خصوصی</b>\n\nاز مینی‌اپ به میز دوستت بپیوند.'
+          : '♠️ <b>میز حکم</b>\n\nبه تالار خوش اومدی، '+escape(playerName(user))+'.';
+        await db.run('UPDATE users SET prompt=NULL WHERE id=?',id);
+        await notices.text(id,greeting,[[miniAppButton(this.config,params)]]);
         return;
       }
       if (command[1] === 'invite' && args) {
         await this.search(ctx,user,args);
         return;
       }
-      const redirects = {
-        start:args === 'hokm-store' ? 'store' : 'home',menu:'home',
-        rank:'board:day:0',rules:'help',invite:'search',
-      };
+      const redirects = { invite:'search' };
       const name = Object.hasOwn(redirects,command[1]) ? redirects[command[1]] : command[1];
       await this.action(ctx,user,name);
       return;
     }
     if (!text) {
-      await notices.text(id,'برای ادامه یکی از دکمه‌ها را بزن یا /start را بفرست.');
+      await notices.text(id,'برای ادامه، میز حکم را باز کن.',[[miniAppButton(this.config)]]);
       return;
     }
 
     if (user.prompt?.startsWith('edit:')) {
       const field = user.prompt.slice(5);
-      const limits = { nickname:32,alias:24,bio:110 };
-      if (!Object.hasOwn(limits,field)) return;
-      const limit = limits[field];
-      let value = text === 'پاک' ? '' : shortText(text,limit+1);
-      if (field === 'alias' && value) {
-        value = latin(value).replace(/^@/,'').toLowerCase();
-        if (!/^[a-z][a-z0-9_]{2,23}$/.test(value)) throw new GameError('نام کاربری باید ۳ تا ۲۴ حرف انگلیسی، عدد یا زیرخط باشد و با حرف شروع شود.');
-        if (await db.scalar('SELECT 1 FROM users WHERE alias=? AND id<>?',value,id)) throw new GameError('این نام کاربری گرفته شده.');
-      }
-      if ([...value].length > limit) throw new GameError('حداکثر '+fa(limit)+' نویسه بنویس.');
-      await db.run('UPDATE users SET '+field+'=?,prompt=NULL WHERE id=?',value || (field === 'bio' ? '' : null),id);
+      await changePlayerField(db,id,field,text === 'پاک' ? '' : text);
       await this.show(notices,id,views.profile(await db.one('SELECT * FROM users WHERE id=?',id)));
       return;
     }
@@ -168,23 +157,12 @@ export class Bot {
         break;
       }
       default:
-        await this.show(notices,id,views.main(user));
+        await notices.text(id,'از تالار بازی، میز دلخواهت را انتخاب کن.',[[miniAppButton(this.config)]]);
     }
   }
 
   async search({db,notices}, user, input) {
-    const value = latin(input.trim());
-    let person = null;
-    if (/^[1-9]\d{1,15}$/.test(value) && validUserId(Number(value))) {
-      person = await db.one('SELECT * FROM users WHERE id=?',Number(value));
-    } else if (/^@?[a-zA-Z0-9_]{3,32}$/.test(value)) {
-      const handle = value.replace(/^@/,'');
-      const columns = value.startsWith('@') ? ['telegram_username','alias'] : ['alias','telegram_username'];
-      for (const column of columns) {
-        person = await db.one('SELECT * FROM users WHERE '+column+'=? ORDER BY active_at DESC LIMIT 1',handle);
-        if (person) break;
-      }
-    }
+    const person = await findPlayer(db,input);
     if (!person || person.id === user.id) throw new GameError('بازیکن پیدا نشد. دوستت باید دست‌کم یک بار /start زده باشد.');
     await db.run('UPDATE users SET prompt=NULL WHERE id=?',user.id);
     await notices.text(user.id,'👤 <b>'+escape(playerName(person))+'</b>'+(person.alias ? '\n<code>'+escape(person.alias)+'</code>' : ''),[

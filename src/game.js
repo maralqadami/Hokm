@@ -128,6 +128,7 @@ function roundWon(state, team, points) {
 function settleTrick(state) {
   const winner = trickWinner(state.trick, state.trump);
   const team = winner % 2;
+  state.lastTrick = { cards:state.trick,winner,round:state.round };
   state.lastWinner = winner;
   state.trick = [];
   state.turn = winner;

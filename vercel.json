@@ -5,17 +5,75 @@
   "buildCommand": "npm run build",
   "outputDirectory": "public",
   "functions": {
-    "api/hokm.js": { "maxDuration": 40, "includeFiles": "src/schema.sql" }
+    "api/hokm.js": {
+      "maxDuration": 40,
+      "includeFiles": "src/schema.sql"
+    }
   },
   "redirects": [
-    { "source": "/install.php", "destination": "/install", "permanent": false },
-    { "source": "/installer.php", "destination": "/install", "permanent": false },
-    { "source": "/admin.php", "destination": "/admin", "permanent": false }
+    {
+      "source": "/install.php",
+      "destination": "/install",
+      "permanent": false
+    },
+    {
+      "source": "/installer.php",
+      "destination": "/install",
+      "permanent": false
+    },
+    {
+      "source": "/admin.php",
+      "destination": "/admin",
+      "permanent": false
+    }
   ],
   "rewrites": [
-    { "source": "/", "destination": "/api/hokm?page=home" },
-    { "source": "/install", "destination": "/api/hokm?page=install" },
-    { "source": "/admin", "destination": "/api/hokm?page=admin" },
-    { "source": "/api/telegram", "destination": "/api/hokm?page=telegram" }
+    {
+      "source": "/",
+      "destination": "/api/hokm?page=home"
+    },
+    {
+      "source": "/app",
+      "destination": "/miniapp.html"
+    },
+    {
+      "source": "/install",
+      "destination": "/api/hokm?page=install"
+    },
+    {
+      "source": "/admin",
+      "destination": "/api/hokm?page=admin"
+    },
+    {
+      "source": "/api/miniapp",
+      "destination": "/api/hokm?page=miniapp"
+    },
+    {
+      "source": "/api/telegram",
+      "destination": "/api/hokm?page=telegram"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/(app|miniapp\\.html)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-cache"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "same-origin"
+        },
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "Content-Security-Policy",
+          "value": "default-src 'none'; script-src 'self' https://telegram.org; font-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'self' https://web.telegram.org https://*.telegram.org"
+        }
+      ]
+    }
   ]
 }

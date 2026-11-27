@@ -2,6 +2,7 @@ import { createHmac, scrypt as nodeScrypt } from 'node:crypto';
 import { promisify } from 'node:util';
 import { equalSecret, escape, fa, nonce, periodNames, periodTitle, shortText, stamp, unixTime } from './core.js';
 import { GameError } from './game.js';
+import { miniAction, MiniAppError, verifyMiniUser } from './miniapp.js';
 import { paymentLabels, Payments, rewardLabels, themes } from './payments.js';
 import { Notices, playerName, Tables } from './tables.js';
 import { TelegramError, validBotToken } from './telegram.js';
@@ -10,7 +11,7 @@ import { Bot } from './bot.js';
 const scrypt = promisify(nodeScrypt);
 const sessionCookie = 'hokm_admin';
 const sessionHours = 12;
-const routes = { '/':'home','/install':'install','/admin':'admin','/api/telegram':'telegram' };
+const routes = { '/':'home','/install':'install','/admin':'admin','/api/telegram':'telegram','/api/miniapp':'miniapp' };
 const legacy = { '/install.php':'/install','/installer.php':'/install','/admin.php':'/admin' };
 const tabs = { overview:'نمای کلی',feedback:'بازخورد',settings:'تنظیمات',payments:'تراکنش‌ها',gifts:'گیفت‌ها' };
 
@@ -361,8 +362,8 @@ export function createApp(options) {
         const items = [['بازیکن ثبت‌شده',counts.users],['میز فعال',counts.active],['مسابقه ثبت‌شده',counts.played],['بازیکن در صف',counts.queued]];
         const meters = '<div class="metrics">'+items.map(([label,value])=>'<section class="tile"><span>'+label+
           '</span><strong>'+fa(value)+'</strong></section>').join('')+'</div>';
-        return meters+panel('ربات تلگرام','<div class="actions">'+link('باز کردن ربات','https://t.me/'+config.username)+
-          adminForm('sync','همگام‌سازی اتصال و میانبرها',csrf)+'</div><p class="muted">برای تست یک‌نفره، /start را بزن و بازی تمرینی را باز کن.</p>');
+        return meters+panel('مینی‌اپ تلگرام','<div class="actions">'+link('باز کردن گفتگو در تلگرام','https://t.me/'+config.username)+
+          adminForm('sync','همگام‌سازی اتصال و منوی مینی‌اپ',csrf)+'</div><p class="muted">در تلگرام «بازی حکم» را باز کن و یک میز تمرینی بساز.</p>');
       }
       case 'feedback': {
         const list = await db.all('SELECT f.*,u.name,u.nickname FROM feedback f LEFT JOIN users u ON u.id=f.user_id ORDER BY f.created_at DESC,f.id DESC LIMIT 90');
@@ -452,6 +453,57 @@ export function createApp(options) {
     return respond(res,done?200:503,done?'OK':'Delivery queued','text/plain; charset=utf-8');
   }
 
+  async function miniapp(req,res,origin) {
+    const send = (status,data) => respond(res,status,JSON.stringify(data),'application/json; charset=utf-8');
+    try {
+      if (req.method === 'GET') {
+        const config = await readConfig(options.database());
+        return send(200,{ bot:config?.username ?? null });
+      }
+      if (req.method !== 'POST') {
+        res.setHeader('Allow','GET, POST');
+        return send(405,{ error:'روش درخواست معتبر نیست.' });
+      }
+      correctOrigin(req,origin);
+      if (!String(req.headers['content-type'] ?? '').toLowerCase().startsWith('application/json')) {
+        throw new RequestError(415,'فرمت درخواست معتبر نیست.');
+      }
+      const token = options.botToken();
+      if (!validBotToken(token)) throw new RequestError(503,'میز حکم هنوز راه‌اندازی نشده است.');
+      const now = unixTime();
+      const identity = verifyMiniUser(req.headers.authorization,token,now);
+      const db = options.database();
+      const config = await readConfig(db);
+      if (!config) throw new RequestError(503,'میز حکم هنوز راه‌اندازی نشده است.');
+      if (config.base !== origin) throw new RequestError(403,'مینی‌اپ را از گفت‌وگوی اصلی میز حکم باز کن.');
+      let input;
+      try {
+        input = JSON.parse(await rawBody(req,8192));
+      } catch (error) {
+        if (error instanceof RequestError) throw error;
+        throw new RequestError(400,'اطلاعات درخواست قابل خواندن نیست.');
+      }
+      if (!input || Array.isArray(input) || typeof input.action !== 'string') {
+        throw new RequestError(400,'درخواست معتبر نیست.');
+      }
+      const starsEnabled = options.starsEnabled();
+      const api = options.telegram();
+      const result = await miniAction({db,config,now,starsEnabled,identity,api},input);
+      if (input.action === 'invite') {
+        try {
+          await new Bot(db,api,config,starsEnabled,now).drain(1);
+        } catch (error) {
+          console.error('miz-hokm invitation:',error?.code ?? error?.name ?? 'error');
+        }
+      }
+      return send(200,result);
+    } catch (error) {
+      if (error instanceof MiniAppError || error instanceof RequestError) return send(error.status,{ error:error.message });
+      if (error instanceof GameError) return send(409,{ error:error.message });
+      return send(503,{ error:statusMessage(error) });
+    }
+  }
+
   return async function handler(req,res) {
     let page;
     try {
@@ -461,10 +513,11 @@ export function createApp(options) {
       page=Object.hasOwn(routes,url.pathname)?routes[url.pathname]:null;
       if (url.pathname==='/api/hokm') page=url.searchParams.get('page');
       if (page==='telegram') return await telegram(req,res);
+      if (page==='miniapp') return await miniapp(req,res,origin);
       if (!['GET','POST','HEAD'].includes(req.method)) return respond(res,405,'Method not allowed','text/plain; charset=utf-8');
       if (page==='install') return await install(req,res,origin);
       if (page==='admin') return await admin(req,res,url,origin);
-      if (page==='home') return redirect(res,'/admin',302);
+      if (page==='home') return redirect(res,'/app',302);
       return respond(res,404,shell('صفحه در دسترس نیست',panel('میز حکم',link('باز کردن نصب‌گر','/install'))));
     } catch (error) {
       const status=error.status ?? 503;

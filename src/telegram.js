@@ -1,11 +1,15 @@
 import { shortText } from './core.js';
 
 export const commands = {
-  start:'خانه و منوی اصلی',play:'میز رقابتی، خصوصی یا تمرینی',table:'بازگشت به میز بازی',
-  profile:'پروفایل و آمار بازی',friends:'پیدا کردن دوست و دعوت به میز',rank:'رتبه‌بندی روزانه، هفتگی و ماهانه',
-  wallet:'تم‌ها و رسیدها',help:'قوانین بازی و راهنما',feedback:'ارسال بازخورد ناشناس',
-  paysupport:'پیگیری خرید و بازگشت وجه',cancel:'لغو و خروج',privacy:'حریم خصوصی و داده‌ها',
+  start:'باز کردن مینی‌اپ میز حکم',help:'راهنمای بازی در مینی‌اپ',
+  paysupport:'پیگیری خرید و بازگشت وجه',privacy:'حریم خصوصی و داده‌ها',
 };
+
+export function miniAppButton(config, params = {}, text = 'باز کردن میز حکم') {
+  const url = new URL('/app',config.base);
+  for (const [key,value] of Object.entries(params)) url.searchParams.set(key,value);
+  return { text,web_app:{ url:url.href } };
+}
 
 export class TelegramError extends Error {
   constructor(code, message, retry = 0) {
@@ -53,6 +57,6 @@ export class Telegram {
       allowed_updates:['message','callback_query','pre_checkout_query'], max_connections:4,
     },7500);
     await this.call('setMyCommands', { commands:listed, scope:{ type:'all_private_chats' } });
-    await this.call('setChatMenuButton', { menu_button:{type:'commands'} });
+    await this.call('setChatMenuButton', { menu_button:{type:'web_app',...miniAppButton(config,{},'بازی حکم')} });
   }
 }

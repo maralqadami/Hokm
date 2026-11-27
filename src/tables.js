@@ -25,9 +25,10 @@ export class Notices {
 }
 
 export class Tables {
-  constructor(db, now) {
+  constructor(db, now, chatUpdates = true) {
     this.db = db;
     this.now = now;
+    this.chatUpdates = chatUpdates;
     this.notices = new Notices(db,now);
   }
 
@@ -41,6 +42,13 @@ export class Tables {
 
   async available(user) {
     if (await this.current(user)) throw new GameError('یک میز باز داری. از «میز من» ادامه بده.');
+  }
+
+  async queued(user) {
+    const joined = await this.db.scalar('SELECT joined_at FROM queue WHERE user_id=? AND joined_at>?',user,this.now-queueSeconds);
+    if (joined === null) return null;
+    const count = await this.db.scalar('SELECT COUNT(*) FROM queue WHERE joined_at>?',this.now-queueSeconds);
+    return { count,expiresAt:joined+queueSeconds };
   }
 
   async queue(user) {
@@ -94,7 +102,7 @@ export class Tables {
     if (!game) throw new GameError('این دعوت معتبر نیست یا میز پر شده.');
     const current = await this.current(user);
     if (current?.id === game.id) {
-      await this.notices.table(game.id,user,true);
+      if (this.chatUpdates) await this.notices.table(game.id,user,true);
       return;
     }
     if (current) throw new GameError('یک میز باز داری. از «میز من» ادامه بده.');
@@ -107,7 +115,7 @@ export class Tables {
     else await this.notify(game.id,users);
   }
 
-  async invite(from, user, name) {
+  async invite(from, user, name, launchButton = null) {
     if (from === user) throw new GameError('این پروفایل خودت است.');
     if (Number(await this.db.scalar('SELECT COUNT(*) FROM invites WHERE from_id=? AND created_at>?',from,this.now-300)) >= 5) {
       throw new GameError('تا چند دقیقه دیگر دوباره دعوت بفرست.');
@@ -117,9 +125,9 @@ export class Tables {
       throw new GameError('قبلاً دعوت این میز برای این بازیکن ارسال شده.');
     }
     await this.notices.text(user,'✉️ <b>دعوت به میز حکم</b>\n' + escape(name) + ' تو را به یک مسابقهٔ خصوصی دعوت کرده.',[
-      [{text:'قبول دعوت',callback_data:'join:'+game.code,style:'success'}],
+      [launchButton?.(game.code) ?? {text:'قبول دعوت',callback_data:'join:'+game.code,style:'success'}],
     ]);
-    await this.notices.table(game.id,from);
+    if (this.chatUpdates) await this.notices.table(game.id,from);
   }
 
   async leaveWaiting(game, user) {
@@ -172,8 +180,8 @@ export class Tables {
       return;
     }
     if (version !== state.v) {
-      await this.notices.table(gameId,actor);
-      throw new GameError('میز به‌روز شد. با دکمه‌های آخرین پیام ادامه بده.');
+      if (this.chatUpdates) await this.notices.table(gameId,actor);
+      throw new GameError('میز به‌روز شد. دوباره حرکتت را انتخاب کن.');
     }
     if (action === 'resign') finishGame(state,1-seat%2,'resign');
     else {
@@ -201,6 +209,7 @@ export class Tables {
   }
 
   async notify(game, seats = null) {
+    if (!this.chatUpdates) return;
     const users = seats ?? (await this.members(game)).map(row => row.user_id);
     for (const user of users) if (user !== null) await this.notices.table(game,user);
   }

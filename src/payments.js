@@ -40,12 +40,14 @@ export class Payments {
   }
 
   async theme(user, sku) {
-    if (!Object.hasOwn(themes,sku) || !(await this.owned(user,sku))) throw new GameError('این تم هنوز برای پروفایلت فعال نشده.');
+    if (typeof sku !== 'string' || !Object.hasOwn(themes,sku) || !(await this.owned(user,sku))) {
+      throw new GameError('این تم هنوز برای پروفایلت فعال نشده.');
+    }
     await this.db.run('UPDATE users SET theme=? WHERE id=?',sku,user);
   }
 
-  async order(user, sku) {
-    const item = themes[sku];
+  async prepareOrder(user, sku) {
+    const item = typeof sku === 'string' && Object.hasOwn(themes,sku) ? themes[sku] : null;
     if (!this.enabled || !item?.stars || !(await this.db.flag('store_open'))) {
       throw new GameError('فروش این تم در حال حاضر فعال نیست.');
     }
@@ -58,6 +60,11 @@ export class Payments {
       await this.db.run("INSERT INTO invoices(id,user_id,sku,stars,status,created_at,updated_at) VALUES(?,?,?,?,'pending',?,?)",
         id,user,sku,item.stars,this.now,this.now);
     }
+    return id;
+  }
+
+  async order(user, sku) {
+    const id = await this.prepareOrder(user,sku);
     await this.notices.add('invoice',user,{id},'invoice:'+id);
   }
 
@@ -129,15 +136,28 @@ export class Payments {
     await this.notices.text(charge.user_id,'↩️ بازگشت '+fa(charge.total)+' استارز ثبت شد. جزئیات در /wallet.');
   }
 
-  async issue(api, id) {
-    if (!this.enabled) return;
+  async invoiceDetails(id) {
+    if (!this.enabled) return null;
     const row = await this.db.one("SELECT * FROM invoices WHERE id=? AND status='pending' AND created_at>?",id,this.now-invoiceSeconds);
-    if (!row) return;
+    if (!row) return null;
     const item = themes[row.sku];
-    await api.call('sendInvoice',{
-      chat_id:row.user_id,title:'تم '+item.name,description:item.description+'. انتخاب تم روی نتیجه و جدول اثری ندارد.',
-      payload:id,provider_token:'',currency:'XTR',prices:[{label:item.name,amount:row.stars}],start_parameter:'hokm-store',
-    });
+    const invoice = {
+      title:'تم '+item.name, description:item.description+'. انتخاب تم روی نتیجه و جدول اثری ندارد.',
+      payload:id, provider_token:'', currency:'XTR', prices:[{label:item.name,amount:row.stars}],
+    };
+    return { row,invoice };
+  }
+
+  async issue(api, id) {
+    const details = await this.invoiceDetails(id);
+    if (!details) return;
+    await api.call('sendInvoice',{ chat_id:details.row.user_id,start_parameter:'hokm-store',...details.invoice });
+  }
+
+  async invoiceLink(api, id) {
+    const details = await this.invoiceDetails(id);
+    if (!details) throw new GameError('این فاکتور دیگر در دسترس نیست.');
+    return api.call('createInvoiceLink',details.invoice);
   }
 
   async refund(api, id) {
